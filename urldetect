@@ -1,0 +1,4 @@
+#!/bin/bash
+cd ~/url-detector
+source venv/bin/activate
+python scan.py "$@"

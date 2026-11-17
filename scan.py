@@ -1,0 +1,72 @@
+import sys
+import csv
+import os
+import joblib
+import pandas as pd
+import tldextract
+from features import extract_features
+
+bundle = joblib.load("model.joblib")
+model = bundle["model"]
+columns = bundle["columns"]
+
+LOW = 0.35   # below this = BENIGN
+HIGH = 0.75  # at or above this = MALICIOUS
+
+ALLOWLIST = {
+    "google.com", "youtube.com", "facebook.com", "microsoft.com", "apple.com",
+    "amazon.com", "wikipedia.org", "github.com", "linkedin.com", "twitter.com",
+    "x.com", "instagram.com", "yahoo.com", "bing.com", "reddit.com",
+    "cloudflare.com", "kali.org", "sliit.lk", "gov.lk", "anthropic.com",
+}
+
+def load_feed(path="data/openphish.txt"):
+    if not os.path.exists(path):
+        return set()
+    with open(path) as f:
+        return {line.strip().rstrip("/").lower() for line in f if line.startswith("http")}
+
+FEED = load_feed()
+
+def scan(url):
+    norm = url.strip().rstrip("/").lower()
+    if norm in FEED:
+        return "MALICIOUS", 1.0, "openphish"
+    ext = tldextract.extract(url)
+    registered = f"{ext.domain}.{ext.suffix}"
+    if registered in ALLOWLIST:
+        return "BENIGN", 0.0, "allowlist"
+    X = pd.DataFrame([extract_features(url)])[columns]
+    prob = model.predict_proba(X)[0][1]
+    if prob >= HIGH:
+        verdict = "MALICIOUS"
+    elif prob >= LOW:
+        verdict = "SUSPICIOUS"
+    else:
+        verdict = "BENIGN"
+    return verdict, prob, "model"
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage:")
+        print("  python scan.py <url> [url2 ...]")
+        print("  python scan.py -f urls.txt [-o results.csv]")
+        sys.exit(1)
+
+    if sys.argv[1] == "-f":
+        infile = sys.argv[2]
+        outfile = sys.argv[sys.argv.index("-o") + 1] if "-o" in sys.argv else "results.csv"
+        with open(infile) as f:
+            urls = [line.strip() for line in f if line.strip()]
+        with open(outfile, "w", newline="") as out:
+            w = csv.writer(out)
+            w.writerow(["url", "verdict", "probability", "source"])
+            for u in urls:
+                verdict, prob, src = scan(u)
+                w.writerow([u, verdict, f"{prob:.3f}", src])
+                print(f"{verdict:10} {prob:6.1%}  [{src}]  {u}")
+        print(f"\nSaved {len(urls)} results to {outfile}")
+    else:
+        for u in sys.argv[1:]:
+            verdict, prob, src = scan(u)
+            print(f"{verdict:10} {prob:6.1%}  [{src}]  {u}")
